@@ -1388,3 +1388,80 @@ export async function downloadHRPolicyDocument(
   }
   return { ok: true, status: response.status, body: await response.blob() };
 }
+
+// ── AI Copilot API helpers ────────────────────────────────────────────────────
+
+function getStoredToken(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem("access_token") || "";
+}
+
+async function aiPost<T>(path: string, message: string): Promise<{ data: T }> {
+  const token = getStoredToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Request failed (${res.status})`);
+  }
+  const json = await res.json();
+  return { data: json.data };
+}
+
+export type PolicyChatData = {
+  answer: string;
+  sources: Array<{ title: string; category: string; filename?: string | null }>;
+};
+
+export type SQLChatData = {
+  answer: string;
+  sql: string | null;
+  rows: Record<string, unknown>[];
+};
+
+export type ActionChatData = {
+  intent: string;
+  result: string;
+  data: unknown;
+  success: boolean;
+};
+
+export type RouterChatData = {
+  intent: string;
+  confidence: number;
+  reason: string;
+};
+
+export const chatPolicy = (message: string) =>
+  aiPost<PolicyChatData>("/api/v1/chat/policy", message);
+
+export const chatSQL = (message: string) =>
+  aiPost<SQLChatData>("/api/v1/chat/sql", message);
+
+export const chatActions = (message: string) =>
+  aiPost<ActionChatData>("/api/v1/chat/actions", message);
+
+export const chatRouter = (message: string) =>
+  aiPost<RouterChatData>("/api/v1/chat/router", message);
+
+export async function getAIAuditLogs(token: string, limit = 50, offset = 0) {
+  const res = await fetch(
+    `${API_BASE}/api/v1/chat/audit-logs?limit=${limit}&offset=${offset}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.json();
+}
+
+export async function reindexPolicies(token: string) {
+  const res = await fetch(`${API_BASE}/api/v1/chat/policy/reindex`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.json();
+}

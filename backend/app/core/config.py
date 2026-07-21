@@ -17,5 +17,14 @@ class Settings(BaseSettings):
     profile_photo_upload_dir: str = "/app/storage/profile-photos"
     employee_document_upload_dir: str = "/app/storage/employee-documents"
 
+    # --- AI / Phase-4 settings ---
+    openai_api_key: str = ""
+    openai_chat_model: str = "gpt-4o-mini"
+    openai_embedding_model: str = "text-embedding-3-small"
+    chroma_db_path: str = "./storage/chroma_db"
+    # Base URL this backend is reachable at (used by action-agent for self-calls)
+    internal_api_base_url: str = "http://localhost:8000"
+    ai_sql_row_limit: int = 50
+
 
 settings = Settings()
