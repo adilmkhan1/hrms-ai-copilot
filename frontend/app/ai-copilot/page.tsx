@@ -6,10 +6,18 @@ import { ChatPanel, ChatMessage } from "@/components/ai/chat-panel";
 import { SourceList, PolicySource } from "@/components/ai/source-list";
 import { SQLResultTable } from "@/components/ai/sql-result-table";
 import { ActionResultCard } from "@/components/ai/action-result-card";
+import { HITLConfirmation } from "@/components/ai/hitl-confirmation";
 import { AIActivityFeed, AIActivityItem } from "@/components/ai/activity-feed";
-import { chatPolicy, chatSQL, chatActions, getMyAIActivity } from "@/lib/api";
+import { chatPolicy, chatSQL, chatActions, getMyAIActivity, confirmAction } from "@/lib/api";
 
 type Tab = "policy" | "sql" | "actions" | "activity";
+
+// State for a pending HITL confirmation (graph paused, waiting for human)
+interface PendingConfirmation {
+  threadId: string;
+  confirmationMessage: string;
+  actionIntent: string | null;
+}
 
 const TABS: {
   id: Tab;
@@ -36,8 +44,8 @@ const TABS: {
     id: "actions",
     label: "Automate HR Task",
     icon: Zap,
-    description: "Apply for leave, create tickets, approve requests, and more — just by typing.",
-    placeholder: "e.g. Apply sick leave for tomorrow. Create a ticket for VPN issue.",
+    description: "Apply for leave, create tickets, approve requests — just by typing.",
+    placeholder: "e.g. Approve leave request #3. Create a ticket for VPN issue.",
   },
   {
     id: "activity",
@@ -68,22 +76,22 @@ const SAMPLES: Record<string, string[]> = {
     "Check my leave balance",
     "Apply casual leave for tomorrow",
     "Create a high-priority IT ticket for VPN issue",
-    "Show my recent tickets",
+    "Approve leave request #3",          // ← will trigger HITL
+    "Create an announcement: Friday townhall moved to 5 PM",  // ← HITL
   ],
 };
 
 export default function AICopilotPage() {
   const [activeTab, setActiveTab] = useState<Tab>("policy");
   const [messagesByTab, setMessagesByTab] = useState<Record<string, ChatMessage[]>>({
-    policy: [],
-    sql: [],
-    actions: [],
+    policy: [], sql: [], actions: [],
   });
   const [loadingByTab, setLoadingByTab] = useState<Record<string, boolean>>({
-    policy: false,
-    sql: false,
-    actions: false,
+    policy: false, sql: false, actions: false,
   });
+
+  // HITL state — one pending confirmation at a time per tab
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
 
   // Activity tab state
   const [activityItems, setActivityItems] = useState<AIActivityItem[]>([]);
@@ -94,36 +102,69 @@ export default function AICopilotPage() {
     try {
       const data = await getMyAIActivity(20, 0);
       setActivityItems(data.items ?? []);
-    } catch {
-      setActivityItems([]);
-    } finally {
-      setActivityLoading(false);
-    }
+    } catch { setActivityItems([]); }
+    finally { setActivityLoading(false); }
   }, []);
 
-  // Auto-fetch activity when tab opens
   useEffect(() => {
-    if (activeTab === "activity") {
-      fetchActivity();
-    }
+    if (activeTab === "activity") fetchActivity();
   }, [activeTab, fetchActivity]);
 
   const addMessage = useCallback((tab: string, message: ChatMessage) => {
-    setMessagesByTab((prev) => ({
-      ...prev,
-      [tab]: [...(prev[tab] ?? []), message],
-    }));
+    setMessagesByTab((prev) => ({ ...prev, [tab]: [...(prev[tab] ?? []), message] }));
   }, []);
 
-  const handleSend = useCallback(
-    async (tab: string, message: string) => {
-      addMessage(tab, {
+  // ── Handle HITL Confirm / Cancel ─────────────────────────────────────────
+  const handleHITLResponse = useCallback(
+    async (threadId: string, confirmed: boolean) => {
+      setPendingConfirmation(null);
+      setLoadingByTab((prev) => ({ ...prev, actions: true }));
+
+      addMessage("actions", {
         id: generateId(),
         role: "user",
-        content: message,
+        content: confirmed ? "✅ Confirmed — proceed." : "❌ Cancelled.",
         timestamp: new Date(),
       });
 
+      try {
+        const res = await confirmAction(threadId, confirmed);
+        const data = res.data;
+        addMessage("actions", {
+          id: generateId(),
+          role: "assistant",
+          content: data.result || (confirmed ? "Action completed." : "Action was cancelled."),
+          timestamp: new Date(),
+          extra: (
+            <ActionResultCard
+              intent={data.action_status ?? ""}
+              success={data.success}
+              data={data.data}
+            />
+          ),
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Something went wrong.";
+        addMessage("actions", {
+          id: generateId(),
+          role: "assistant",
+          content: `⚠️ ${msg}`,
+          timestamp: new Date(),
+        });
+      } finally {
+        setLoadingByTab((prev) => ({ ...prev, actions: false }));
+      }
+    },
+    [addMessage]
+  );
+
+  // ── Main send handler ─────────────────────────────────────────────────────
+  const handleSend = useCallback(
+    async (tab: string, message: string) => {
+      // Clear any pending HITL if user sends a new message
+      if (tab === "actions") setPendingConfirmation(null);
+
+      addMessage(tab, { id: generateId(), role: "user", content: message, timestamp: new Date() });
       setLoadingByTab((prev) => ({ ...prev, [tab]: true }));
 
       try {
@@ -131,53 +172,54 @@ export default function AICopilotPage() {
           const res = await chatPolicy(message);
           const data = res.data;
           addMessage(tab, {
-            id: generateId(),
-            role: "assistant",
-            content: data.answer,
-            timestamp: new Date(),
+            id: generateId(), role: "assistant", content: data.answer, timestamp: new Date(),
             extra: <SourceList sources={data.sources as PolicySource[]} />,
           });
+
         } else if (tab === "sql") {
           const res = await chatSQL(message);
           const data = res.data;
           addMessage(tab, {
-            id: generateId(),
-            role: "assistant",
-            content: data.answer,
-            timestamp: new Date(),
-            extra: (
-              <SQLResultTable
-                rows={data.rows as Record<string, unknown>[]}
-                sql={data.sql}
-              />
-            ),
+            id: generateId(), role: "assistant", content: data.answer, timestamp: new Date(),
+            extra: <SQLResultTable rows={data.rows as Record<string, unknown>[]} sql={data.sql} />,
           });
+
         } else if (tab === "actions") {
           const res = await chatActions(message);
           const data = res.data;
-          addMessage(tab, {
-            id: generateId(),
-            role: "assistant",
-            content: data.result,
-            timestamp: new Date(),
-            extra: (
-              <ActionResultCard
-                intent={data.intent}
-                success={data.success}
-                data={data.data}
-              />
-            ),
-          });
+
+          // ── HITL triggered — graph paused ──
+          if (data.needs_confirmation) {
+            addMessage(tab, {
+              id: generateId(),
+              role: "assistant",
+              content: "⚠️ This action requires your confirmation before proceeding.",
+              timestamp: new Date(),
+            });
+            setPendingConfirmation({
+              threadId: data.thread_id,
+              confirmationMessage: data.confirmation_message,
+              actionIntent: data.action_intent ?? null,
+            });
+          } else {
+            // ── Direct execution — no confirmation needed ──
+            addMessage(tab, {
+              id: generateId(), role: "assistant",
+              content: data.result ?? "Done.",
+              timestamp: new Date(),
+              extra: (
+                <ActionResultCard
+                  intent={data.intent ?? ""}
+                  success={data.success}
+                  data={data.data}
+                />
+              ),
+            });
+          }
         }
       } catch (err: unknown) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Something went wrong. Please try again.";
-        addMessage(tab, {
-          id: generateId(),
-          role: "assistant",
-          content: `⚠️ ${errorMsg}`,
-          timestamp: new Date(),
-        });
+        const msg = err instanceof Error ? err.message : "Something went wrong. Please try again.";
+        addMessage(tab, { id: generateId(), role: "assistant", content: `⚠️ ${msg}`, timestamp: new Date() });
       } finally {
         setLoadingByTab((prev) => ({ ...prev, [tab]: false }));
       }
@@ -200,12 +242,18 @@ export default function AICopilotPage() {
           <div>
             <h1 className="text-lg font-semibold text-white">AI HR Copilot</h1>
             <p className="text-xs text-slate-400">
-              Powered by GPT-4o · Role-aware · Secure
+              Powered by LangGraph · GPT-4o · HITL · RBAC
             </p>
           </div>
-          <div className="ml-auto flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 ring-1 ring-emerald-500/20">
-            <Shield className="h-3 w-3" />
-            RBAC Enforced
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-3 py-1 text-xs text-indigo-400 ring-1 ring-indigo-500/20">
+              <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />
+              LangGraph
+            </div>
+            <div className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400 ring-1 ring-emerald-500/20">
+              <Shield className="h-3 w-3" />
+              RBAC
+            </div>
           </div>
         </div>
       </div>
@@ -228,15 +276,13 @@ export default function AICopilotPage() {
                 <tab.icon className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
                   <p className="font-medium leading-tight">{tab.label}</p>
-                  <p className="mt-0.5 text-[11px] leading-tight opacity-60">
-                    {tab.description}
-                  </p>
+                  <p className="mt-0.5 text-[11px] leading-tight opacity-60">{tab.description}</p>
                 </div>
               </button>
             ))}
           </nav>
 
-          {/* Sample questions (only for chat tabs) */}
+          {/* Sample questions */}
           {activeTab !== "activity" && SAMPLES[activeTab] && (
             <div className="border-t border-white/10 p-3">
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -251,6 +297,9 @@ export default function AICopilotPage() {
                     className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
                   >
                     {q}
+                    {(q.includes("Approve") || q.includes("announcement")) && (
+                      <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[9px] text-amber-400">HITL</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -261,15 +310,12 @@ export default function AICopilotPage() {
           <div className="mt-auto border-t border-white/10 p-3">
             <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-400">
               <BookOpen className="mt-0.5 h-3 w-3 shrink-0" />
-              <span>
-                AI answers are grounded in your company's HR policies and data.
-                Always verify critical decisions with HR.
-              </span>
+              <span>AI answers are grounded in your company data. Verify critical decisions with HR.</span>
             </div>
           </div>
         </div>
 
-        {/* Main content area */}
+        {/* Main content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Mobile tab switcher */}
           <div className="flex border-b border-white/10 md:hidden overflow-x-auto">
@@ -278,9 +324,7 @@ export default function AICopilotPage() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex shrink-0 items-center justify-center gap-1.5 px-3 py-3 text-xs font-medium transition ${
-                  activeTab === tab.id
-                    ? "border-b-2 border-indigo-500 text-indigo-400"
-                    : "text-slate-500"
+                  activeTab === tab.id ? "border-b-2 border-indigo-500 text-indigo-400" : "text-slate-500"
                 }`}
               >
                 <tab.icon className="h-3.5 w-3.5" />
@@ -289,16 +333,13 @@ export default function AICopilotPage() {
             ))}
           </div>
 
-          {/* Activity tab content */}
+          {/* Activity tab */}
           {activeTab === "activity" ? (
             <div className="flex flex-1 flex-col overflow-hidden">
-              {/* Activity header */}
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium text-white">Recent AI Interactions</p>
-                  <p className="text-xs text-slate-500">
-                    Your last {activityItems.length} AI requests across all assistants
-                  </p>
+                  <p className="text-xs text-slate-500">Your last {activityItems.length} AI requests</p>
                 </div>
                 <button
                   onClick={fetchActivity}
@@ -314,14 +355,26 @@ export default function AICopilotPage() {
                 <AIActivityFeed items={activityItems} isLoading={activityLoading} />
               </div>
             </div>
+
           ) : (
-            /* Chat tab content */
+            /* Chat tabs */
             <ChatPanel
               key={activeTab}
               placeholder={activeTabInfo.placeholder}
               onSend={(msg) => handleSend(activeTab, msg)}
               messages={messages}
               isLoading={isLoading}
+              // HITL confirmation card rendered as a footer above the input
+              hitlSlot={
+                activeTab === "actions" && pendingConfirmation ? (
+                  <HITLConfirmation
+                    confirmationMessage={pendingConfirmation.confirmationMessage}
+                    actionIntent={pendingConfirmation.actionIntent}
+                    threadId={pendingConfirmation.threadId}
+                    onConfirm={handleHITLResponse}
+                  />
+                ) : null
+              }
               emptyState={
                 <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-4 text-center px-8">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-400/20">
@@ -329,9 +382,12 @@ export default function AICopilotPage() {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-white">{activeTabInfo.label}</h3>
-                    <p className="mt-1.5 text-sm text-slate-400 max-w-sm">
-                      {activeTabInfo.description}
-                    </p>
+                    <p className="mt-1.5 text-sm text-slate-400 max-w-sm">{activeTabInfo.description}</p>
+                    {activeTab === "actions" && (
+                      <p className="mt-2 text-xs text-amber-400/70">
+                        High-impact actions (approve, announce, assign) require HITL confirmation via LangGraph interrupt()
+                      </p>
+                    )}
                   </div>
                   {SAMPLES[activeTab] && (
                     <div className="flex flex-wrap justify-center gap-2 mt-2">
@@ -342,6 +398,9 @@ export default function AICopilotPage() {
                           className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-white"
                         >
                           {q}
+                          {(q.includes("Approve") || q.includes("announcement")) && (
+                            <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-400">HITL</span>
+                          )}
                         </button>
                       ))}
                     </div>

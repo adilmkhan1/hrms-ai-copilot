@@ -25,6 +25,7 @@ from app.schemas.ai_chat import (
 )
 from app.services.ai.audit import log_ai_interaction
 from app.services.auth import get_current_user
+from app.services.ai.graph import run_graph, resume_graph
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ async def chat_sql(
     )
 
 
-# ── HR Action Agent ───────────────────────────────────────────────────────────
+# ── HR Action Agent (LangGraph-powered) ──────────────────────────────────────
 
 @router.post("/actions")
 async def chat_actions(
@@ -150,48 +151,103 @@ async def chat_actions(
     current_user: Employee = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Perform an HR action via natural language.
+    """Perform an HR action via natural language — powered by LangGraph.
 
-    The agent calls existing backend REST APIs — never writes to the DB directly.
+    The LangGraph graph:
+      1. Classifies intent
+      2. Checks permissions
+      3. If high-impact action → pauses via interrupt() and returns needs_confirmation=True
+      4. If safe action       → executes immediately via backend API tool calls
+      5. Writes audit log
+
+    Never writes to the database directly.
     """
-    from app.services.ai.action_agent import execute_hr_action
-
     access_token = _extract_token(request)
 
     try:
-        result = await execute_hr_action(payload.message, current_user, access_token)
-    except Exception as exc:
-        logger.error("Action agent error: %s", exc, exc_info=True)
-        await log_ai_interaction(
-            db,
-            user_id=current_user.id,
-            role=current_user.role.value,
+        state = await run_graph(
             message=payload.message,
-            intent="HR_ACTION",
-            tool_name="action_agent",
-            action_status="ERROR",
+            user_id=current_user.id,
+            user_email=current_user.email,
+            role=current_user.role.value,
+            access_token=access_token,
         )
+    except Exception as exc:
+        logger.error("LangGraph actions error: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=error_response("AI_ERROR", "HR action agent encountered an error."),
         ) from exc
 
-    await log_ai_interaction(
-        db,
-        user_id=current_user.id,
-        role=current_user.role.value,
-        message=payload.message,
-        intent=result.get("intent", "HR_ACTION"),
-        tool_name="action_agent",
-        action_status="SUCCESS" if result.get("success") else "PERMISSION_DENIED",
+    # HITL triggered — graph is paused, waiting for human confirmation
+    if state.get("needs_confirmation"):
+        return success_response(
+            {
+                "needs_confirmation": True,
+                "thread_id": state["thread_id"],
+                "confirmation_message": state.get("confirmation_message"),
+                "action_intent": state.get("action_intent"),
+                "result": None,
+                "success": False,
+            }
+        )
+
+    # Graph completed normally
+    return success_response(
+        {
+            "needs_confirmation": False,
+            "thread_id": state.get("thread_id"),
+            "intent": state.get("action_intent") or state.get("intent"),
+            "result": state.get("answer", ""),
+            "data": state.get("action_result"),
+            "success": state.get("action_success", False),
+        }
     )
+
+
+# ── HITL Confirmation ─────────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class ConfirmActionRequest(BaseModel):
+    thread_id: str
+    confirmed: bool
+
+
+@router.post("/actions/confirm")
+async def confirm_action(
+    payload: ConfirmActionRequest,
+    current_user: Employee = Depends(get_current_user),
+):
+    """Resume a LangGraph graph that was paused for Human-in-the-Loop confirmation.
+
+    Flow:
+      1. Frontend received needs_confirmation=True with a thread_id
+      2. User clicked Confirm or Cancel
+      3. This endpoint resumes the graph via Command(resume={confirmed: bool})
+      4. Graph executes (or cancels) and returns the final result
+    """
+    try:
+        state = await resume_graph(
+            thread_id=payload.thread_id,
+            confirmed=payload.confirmed,
+        )
+    except Exception as exc:
+        logger.error("LangGraph resume error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response("AI_ERROR", "Failed to resume action."),
+        ) from exc
 
     return success_response(
         {
-            "intent": result["intent"],
-            "result": result["result"],
-            "data": result.get("data"),
-            "success": result["success"],
+            "needs_confirmation": False,
+            "thread_id": payload.thread_id,
+            "confirmed": payload.confirmed,
+            "result": state.get("answer", ""),
+            "data": state.get("action_result"),
+            "success": state.get("action_success", False),
+            "action_status": state.get("action_status"),
         }
     )
 
