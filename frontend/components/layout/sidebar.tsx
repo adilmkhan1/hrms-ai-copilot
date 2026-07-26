@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, CalendarClock, CalendarDays, CalendarPlus2, CircleDollarSign, FileText, LayoutDashboard, ScrollText, Ticket, UserCircle2, Users, Vote } from "lucide-react";
+import { Bell, Bot, CalendarClock, CalendarDays, CalendarPlus2, CircleDollarSign, FileText, LayoutDashboard, ScrollText, Ticket, UserCircle2, Users, Vote } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -19,6 +19,7 @@ const navItems = [
   { icon: Vote, label: "Polls", href: "/polls" },
   { icon: CalendarDays, label: "Team Calendar", href: "/team-calendar" },
   { icon: Ticket, label: "Tickets", href: "/tickets" },
+  { icon: Bot, label: "AI Copilot", href: "/ai-copilot" },
 ];
 
 export function Sidebar() {
