@@ -293,3 +293,55 @@ async def get_ai_audit_logs(
             "meta": {"total": total, "limit": limit, "offset": offset},
         }
     )
+
+
+# ── My Recent AI Activity (any authenticated user) ────────────────────────────
+
+@router.get("/my-activity")
+async def get_my_ai_activity(
+    limit: int = 20,
+    offset: int = 0,
+    current_user: Employee = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch the current user's own AI interaction history.
+
+    Available to ALL authenticated users — each user sees only their own logs.
+    """
+    from sqlalchemy import func, select
+    from app.models.ai_audit_log import AIAuditLog
+
+    total = (
+        await db.execute(
+            select(func.count(AIAuditLog.id)).where(
+                AIAuditLog.user_id == current_user.id
+            )
+        )
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            select(AIAuditLog)
+            .where(AIAuditLog.user_id == current_user.id)
+            .order_by(AIAuditLog.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).scalars().all()
+
+    return success_response(
+        {
+            "items": [
+                {
+                    "id": r.id,
+                    "message": r.message,
+                    "intent": r.intent,
+                    "tool_name": r.tool_name,
+                    "action_status": r.action_status,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ],
+            "meta": {"total": total, "limit": limit, "offset": offset},
+        }
+    )

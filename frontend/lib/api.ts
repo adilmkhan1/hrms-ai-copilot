@@ -1465,3 +1465,26 @@ export async function reindexPolicies(token: string) {
   });
   return res.json();
 }
+
+export type AIActivityItem = {
+  id: number;
+  message: string;
+  intent: string | null;
+  tool_name: string | null;
+  action_status: string | null;
+  created_at: string | null;
+};
+
+export async function getMyAIActivity(
+  limit = 20,
+  offset = 0
+): Promise<{ items: AIActivityItem[]; meta: { total: number } }> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : "";
+  const res = await fetch(
+    `${API_BASE}/api/v1/chat/my-activity?limit=${limit}&offset=${offset}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!res.ok) return { items: [], meta: { total: 0 } };
+  const json = await res.json();
+  return json.data ?? { items: [], meta: { total: 0 } };
+}
