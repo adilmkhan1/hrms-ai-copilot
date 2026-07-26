@@ -1,16 +1,23 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Bot, FileText, Database, Zap, History, BookOpen, Shield } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { Bot, FileText, Database, Zap, History, BookOpen, Shield, RefreshCw } from "lucide-react";
 import { ChatPanel, ChatMessage } from "@/components/ai/chat-panel";
 import { SourceList, PolicySource } from "@/components/ai/source-list";
 import { SQLResultTable } from "@/components/ai/sql-result-table";
 import { ActionResultCard } from "@/components/ai/action-result-card";
-import { chatPolicy, chatSQL, chatActions } from "@/lib/api";
+import { AIActivityFeed, AIActivityItem } from "@/components/ai/activity-feed";
+import { chatPolicy, chatSQL, chatActions, getMyAIActivity } from "@/lib/api";
 
-type Tab = "policy" | "sql" | "actions";
+type Tab = "policy" | "sql" | "actions" | "activity";
 
-const TABS: { id: Tab; label: string; icon: React.ElementType; description: string; placeholder: string }[] = [
+const TABS: {
+  id: Tab;
+  label: string;
+  icon: React.ElementType;
+  description: string;
+  placeholder?: string;
+}[] = [
   {
     id: "policy",
     label: "Ask HR Policy",
@@ -32,65 +39,84 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; description: stri
     description: "Apply for leave, create tickets, approve requests, and more — just by typing.",
     placeholder: "e.g. Apply sick leave for tomorrow. Create a ticket for VPN issue.",
   },
+  {
+    id: "activity",
+    label: "Recent Activity",
+    icon: History,
+    description: "Your recent AI interactions across all assistants.",
+  },
 ];
 
 function generateId() {
   return Math.random().toString(36).slice(2, 9);
 }
 
-const SAMPLE_POLICY_QUESTIONS = [
-  "What is the sick leave policy?",
-  "Can I work from home?",
-  "How many casual leaves do I get?",
-  "What happens if I am late?",
-];
-
-const SAMPLE_SQL_QUERIES = [
-  "Which projects are ongoing?",
-  "Show employees with Python skills",
-  "Who is my team members?",
-  "Show my current project assignments",
-];
-
-const SAMPLE_ACTIONS = [
-  "Check my leave balance",
-  "Apply casual leave for tomorrow",
-  "Create a high-priority IT ticket for VPN issue",
-  "Show my recent tickets",
-];
-
-const SAMPLES: Record<Tab, string[]> = {
-  policy: SAMPLE_POLICY_QUESTIONS,
-  sql: SAMPLE_SQL_QUERIES,
-  actions: SAMPLE_ACTIONS,
+const SAMPLES: Record<string, string[]> = {
+  policy: [
+    "What is the sick leave policy?",
+    "Can I work from home?",
+    "How many casual leaves do I get?",
+    "What happens if I am late?",
+  ],
+  sql: [
+    "Which projects are ongoing?",
+    "Show employees with Python skills",
+    "Who are my team members?",
+    "Show my current project assignments",
+  ],
+  actions: [
+    "Check my leave balance",
+    "Apply casual leave for tomorrow",
+    "Create a high-priority IT ticket for VPN issue",
+    "Show my recent tickets",
+  ],
 };
 
 export default function AICopilotPage() {
   const [activeTab, setActiveTab] = useState<Tab>("policy");
-  const [messagesByTab, setMessagesByTab] = useState<Record<Tab, ChatMessage[]>>({
+  const [messagesByTab, setMessagesByTab] = useState<Record<string, ChatMessage[]>>({
     policy: [],
     sql: [],
     actions: [],
   });
-  const [loadingByTab, setLoadingByTab] = useState<Record<Tab, boolean>>({
+  const [loadingByTab, setLoadingByTab] = useState<Record<string, boolean>>({
     policy: false,
     sql: false,
     actions: false,
   });
 
-  const addMessage = useCallback(
-    (tab: Tab, message: ChatMessage) => {
-      setMessagesByTab((prev) => ({
-        ...prev,
-        [tab]: [...prev[tab], message],
-      }));
-    },
-    []
-  );
+  // Activity tab state
+  const [activityItems, setActivityItems] = useState<AIActivityItem[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  const fetchActivity = useCallback(async () => {
+    setActivityLoading(true);
+    try {
+      const data = await getMyAIActivity(20, 0);
+      setActivityItems(data.items ?? []);
+    } catch {
+      setActivityItems([]);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, []);
+
+  // Auto-fetch activity when tab opens
+  useEffect(() => {
+    if (activeTab === "activity") {
+      fetchActivity();
+    }
+  }, [activeTab, fetchActivity]);
+
+  const addMessage = useCallback((tab: string, message: ChatMessage) => {
+    setMessagesByTab((prev) => ({
+      ...prev,
+      [tab]: [...(prev[tab] ?? []), message],
+    }));
+  }, []);
 
   const handleSend = useCallback(
-    async (tab: Tab, message: string) => {
-      // Add user message
+    async (tab: string, message: string) => {
       addMessage(tab, {
         id: generateId(),
         role: "user",
@@ -160,8 +186,8 @@ export default function AICopilotPage() {
   );
 
   const activeTabInfo = TABS.find((t) => t.id === activeTab)!;
-  const messages = messagesByTab[activeTab];
-  const isLoading = loadingByTab[activeTab];
+  const messages = messagesByTab[activeTab] ?? [];
+  const isLoading = loadingByTab[activeTab] ?? false;
 
   return (
     <div className="flex h-[calc(100vh-64px)] flex-col bg-gradient-to-b from-[#0f1b33] to-[#081121]">
@@ -210,24 +236,26 @@ export default function AICopilotPage() {
             ))}
           </nav>
 
-          {/* Sample questions */}
-          <div className="border-t border-white/10 p-3">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              Try these
-            </p>
-            <div className="space-y-1">
-              {SAMPLES[activeTab].map((q, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleSend(activeTab, q)}
-                  disabled={isLoading}
-                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
-                >
-                  {q}
-                </button>
-              ))}
+          {/* Sample questions (only for chat tabs) */}
+          {activeTab !== "activity" && SAMPLES[activeTab] && (
+            <div className="border-t border-white/10 p-3">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Try these
+              </p>
+              <div className="space-y-1">
+                {SAMPLES[activeTab].map((q, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleSend(activeTab, q)}
+                    disabled={isLoading}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11px] text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Disclaimer */}
           <div className="mt-auto border-t border-white/10 p-3">
@@ -241,15 +269,15 @@ export default function AICopilotPage() {
           </div>
         </div>
 
-        {/* Main chat area */}
+        {/* Main content area */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Mobile tab switcher */}
-          <div className="flex border-b border-white/10 md:hidden">
+          <div className="flex border-b border-white/10 md:hidden overflow-x-auto">
             {TABS.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-1 items-center justify-center gap-1.5 py-3 text-xs font-medium transition ${
+                className={`flex shrink-0 items-center justify-center gap-1.5 px-3 py-3 text-xs font-medium transition ${
                   activeTab === tab.id
                     ? "border-b-2 border-indigo-500 text-indigo-400"
                     : "text-slate-500"
@@ -261,37 +289,67 @@ export default function AICopilotPage() {
             ))}
           </div>
 
-          <ChatPanel
-            key={activeTab}
-            placeholder={activeTabInfo.placeholder}
-            onSend={(msg) => handleSend(activeTab, msg)}
-            messages={messages}
-            isLoading={isLoading}
-            emptyState={
-              <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-4 text-center px-8">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-400/20">
-                  <activeTabInfo.icon className="h-8 w-8 text-indigo-400" />
-                </div>
+          {/* Activity tab content */}
+          {activeTab === "activity" ? (
+            <div className="flex flex-1 flex-col overflow-hidden">
+              {/* Activity header */}
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                 <div>
-                  <h3 className="text-lg font-semibold text-white">{activeTabInfo.label}</h3>
-                  <p className="mt-1.5 text-sm text-slate-400 max-w-sm">
-                    {activeTabInfo.description}
+                  <p className="text-sm font-medium text-white">Recent AI Interactions</p>
+                  <p className="text-xs text-slate-500">
+                    Your last {activityItems.length} AI requests across all assistants
                   </p>
                 </div>
-                <div className="flex flex-wrap justify-center gap-2 mt-2">
-                  {SAMPLES[activeTab].map((q, i) => (
-                    <button
-                      key={i}
-                      onClick={() => handleSend(activeTab, q)}
-                      className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-white"
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
+                <button
+                  onClick={fetchActivity}
+                  disabled={activityLoading}
+                  id="activity-refresh"
+                  className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+                >
+                  <RefreshCw className={`h-3 w-3 ${activityLoading ? "animate-spin" : ""}`} />
+                  Refresh
+                </button>
               </div>
-            }
-          />
+              <div className="flex-1 overflow-y-auto">
+                <AIActivityFeed items={activityItems} isLoading={activityLoading} />
+              </div>
+            </div>
+          ) : (
+            /* Chat tab content */
+            <ChatPanel
+              key={activeTab}
+              placeholder={activeTabInfo.placeholder}
+              onSend={(msg) => handleSend(activeTab, msg)}
+              messages={messages}
+              isLoading={isLoading}
+              emptyState={
+                <div className="flex flex-col items-center justify-center h-full min-h-[300px] gap-4 text-center px-8">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/10 ring-1 ring-indigo-400/20">
+                    <activeTabInfo.icon className="h-8 w-8 text-indigo-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">{activeTabInfo.label}</h3>
+                    <p className="mt-1.5 text-sm text-slate-400 max-w-sm">
+                      {activeTabInfo.description}
+                    </p>
+                  </div>
+                  {SAMPLES[activeTab] && (
+                    <div className="flex flex-wrap justify-center gap-2 mt-2">
+                      {SAMPLES[activeTab].map((q, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleSend(activeTab, q)}
+                          className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition hover:border-indigo-400/30 hover:bg-indigo-500/10 hover:text-white"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              }
+            />
+          )}
         </div>
       </div>
     </div>
