@@ -376,3 +376,53 @@ async def _dispatch(
         )
 
     raise ValueError(f"Unknown intent: {intent}")
+
+
+# ── Graph-facing helper (used by LangGraph execute_action_node) ───────────────
+
+async def _execute_tool(
+    intent: str,
+    params: Dict[str, Any],
+    user: Employee,
+    access_token: str,
+) -> Dict[str, Any]:
+    """Execute a pre-classified action.  Called by the LangGraph graph after
+    intent classification and (optionally) HITL confirmation are complete.
+
+    Unlike execute_hr_action(), this function skips the LLM classify step
+    because classification already happened in classify_action_node.
+    """
+    INTENT_TO_PERMISSION: Dict[str, str] = {
+        "create_leave_request":  "create_leave_request",
+        "get_leave_balance":     "view_own_leave",
+        "get_my_leave_requests": "view_own_leave",
+        "approve_leave":         "approve_leave",
+        "reject_leave":          "reject_leave",
+        "get_pending_leaves":    "approve_leave",
+        "create_ticket":         "create_ticket",
+        "get_my_tickets":        "view_own_tickets",
+        "create_announcement":   "create_announcement",
+        "assign_to_project":     "assign_employee_to_project",
+    }
+
+    perm_action = INTENT_TO_PERMISSION.get(intent)
+    if not perm_action:
+        return {
+            "summary": "I'm not sure what you'd like to do. Please describe your HR request more specifically.",
+            "data": None,
+            "success": False,
+        }
+
+    try:
+        require_permission(user.role, perm_action)
+    except PermissionDeniedError as exc:
+        return {"summary": str(exc), "data": None, "success": False}
+
+    try:
+        # _dispatch uses the original message string as fallback for description.
+        # Pass the intent description as a proxy message since we have structured params.
+        summary, data = await _dispatch(intent, params, access_token, user)
+        return {"summary": summary, "data": data, "success": True}
+    except (RuntimeError, ValueError) as exc:
+        return {"summary": str(exc), "data": None, "success": False}
+

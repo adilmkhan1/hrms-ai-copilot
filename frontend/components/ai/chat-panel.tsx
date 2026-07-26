@@ -17,6 +17,7 @@ interface ChatPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
   emptyState?: React.ReactNode;
+  hitlSlot?: React.ReactNode; // HITL confirmation card — shown above input when graph pauses
 }
 
 export function ChatPanel({
@@ -25,6 +26,7 @@ export function ChatPanel({
   messages,
   isLoading,
   emptyState,
+  hitlSlot,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -88,6 +90,9 @@ export function ChatPanel({
 
         <div ref={bottomRef} />
       </div>
+
+      {/* HITL Confirmation slot — shown above input when LangGraph pauses */}
+      {hitlSlot && <div className="border-t border-white/10 px-4 pt-3">{hitlSlot}</div>}
 
       {/* Input */}
       <div className="border-t border-white/10 p-4">

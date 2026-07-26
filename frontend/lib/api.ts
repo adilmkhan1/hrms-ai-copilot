@@ -1426,10 +1426,16 @@ export type SQLChatData = {
 };
 
 export type ActionChatData = {
-  intent: string;
-  result: string;
+  // Normal execution fields
+  intent?: string;
+  result: string | null;
   data: unknown;
   success: boolean;
+  // HITL fields — present when LangGraph graph pauses via interrupt()
+  needs_confirmation: boolean;
+  thread_id: string;
+  confirmation_message: string;
+  action_intent?: string;
 };
 
 export type RouterChatData = {
@@ -1488,3 +1494,34 @@ export async function getMyAIActivity(
   const json = await res.json();
   return json.data ?? { items: [], meta: { total: 0 } };
 }
+
+export type ConfirmActionResponse = {
+  needs_confirmation: false;
+  thread_id: string;
+  confirmed: boolean;
+  result: string;
+  data: unknown;
+  success: boolean;
+  action_status: string;
+};
+
+export async function confirmAction(
+  threadId: string,
+  confirmed: boolean
+): Promise<{ data: ConfirmActionResponse }> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : "";
+  const res = await fetch(`${API_BASE}/api/v1/chat/actions/confirm`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ thread_id: threadId, confirmed }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail?.message ?? "Failed to confirm action");
+  }
+  return res.json();
+}
+
