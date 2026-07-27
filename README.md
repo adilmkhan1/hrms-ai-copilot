@@ -19,16 +19,17 @@
 3. [AI Features Implemented](#-ai-features-implemented)
 4. [LangGraph Orchestration](#-langgraph-multi-agent-orchestration)
 5. [Human-in-the-Loop (HITL)](#-human-in-the-loop-hitl)
-6. [Role-Based Access Control](#-role-based-access-control-for-ai)
-7. [Setup Instructions](#-setup-instructions)
-8. [Environment Variables](#-environment-variables)
-9. [AI Endpoint Contracts](#-ai-endpoint-contracts)
-10. [Test Prompts](#-test-prompts)
-11. [Project Structure](#-project-structure)
-12. [Security Decisions](#-security-decisions)
-13. [Known Limitations](#-known-limitations)
-14. [Evaluation Results](#-evaluation-results)
-15. [Documentation](#-documentation)
+6. [Scale & Cost Optimization (50,000 Users Scale)](#-scale--cost-optimization-50000-users-scale)
+7. [Role-Based Access Control](#-role-based-access-control-for-ai)
+8. [Setup Instructions](#-setup-instructions)
+9. [Environment Variables](#-environment-variables)
+10. [AI Endpoint Contracts](#-ai-endpoint-contracts)
+11. [Test Prompts](#-test-prompts)
+12. [Project Structure](#-project-structure)
+13. [Security Decisions](#-security-decisions)
+14. [Known Limitations](#-known-limitations)
+15. [Evaluation Results](#-evaluation-results)
+16. [Documentation](#-documentation)
 
 ---
 
@@ -344,6 +345,44 @@ execute_action → calls PATCH /api/v1/leaves/requests/3 → audit_log → END
 ### Safe Actions (No Confirmation)
 
 `create_leave_request`, `create_ticket`, `get_leave_balance`, `get_my_leave_requests`, `get_my_tickets`, `get_pending_leaves`
+
+---
+
+## ⚡ Scale & Cost Optimization (50,000 Users Scale)
+
+> See full architecture & ROI report: [`docs/ai_cost_optimization.md`](docs/ai_cost_optimization.md)
+
+To manage costs and latency at **50,000 active employees** (~3,000,000 AI queries/month), the system incorporates a **5-Layer Cost Optimization Architecture**:
+
+```mermaid
+flowchart TD
+    UQ[👤 User Query] --> L1{Layer 1: Exact & Semantic Cache\napp/services/ai/cache.py}
+    
+    L1 -->|Hit ~65%| CH[⚡ Return Cached Answer\n0 LLM API Cost | <15ms]
+    L1 -->|Miss| L2{Layer 2: Fast Heuristic Router\napp/services/ai/router_agent.py}
+
+    L2 -->|Match ~40%| FP[🚀 Skip LLM Router Call\nInstant Keyword Route]
+    L2 -->|Complex Query| L3[Layer 3: Model Tiering\nGPT-4o-mini / Haiku default\nGPT-4o on validation failure only]
+
+    L3 --> L4[Layer 4: Context Truncation\nTop-3 RAG chunks + Role DDL]
+    L4 --> L5[Layer 5: Enterprise vLLM Roadmap\nAWS GPU self-hosted Llama 8B]
+
+    style CH fill:#14532d,stroke:#22c55e,color:#86efac
+    style FP fill:#14532d,stroke:#22c55e,color:#86efac
+    style L1 fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style L2 fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style L3 fill:#78350f,stroke:#f59e0b,color:#fde68a
+```
+
+### Projected Monthly Savings (50,000 Users @ 3M queries/month)
+
+| Strategy / Component | Baseline Unoptimized | Optimized System | Savings (%) |
+|---|---|---|---|
+| **Policy RAG Assistant (60% volume)** | $2,412.00 / month | $482.40 / month | **-80.0%** |
+| **Intent Router Calls** | $225.00 / month | $90.00 / month | **-60.0%** |
+| **SQL & HR Action Agents** | $1,371.00 / month | $548.40 / month | **-60.0%** |
+| **TOTAL MONTHLY LLM COST** | **$4,008.00 / month** | **~$1,120.80 / month** | **-72.0% SAVINGS** |
+| **ANNUAL COST SAVINGS** | — | — | **~$34,646 / year SAVED** |
 
 ---
 
