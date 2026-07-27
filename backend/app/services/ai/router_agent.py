@@ -44,8 +44,45 @@ Examples:
 - "Hello" → UNKNOWN"""
 
 
+def _fast_heuristic_route(message: str) -> Optional[Dict[str, Any]]:
+    """Fast-path deterministic router for common high-frequency intent patterns.
+    Bypasses LLM API calls to save latency and token costs.
+    """
+    msg_lower = message.strip().lower()
+
+    # HR_ACTION triggers
+    if any(k in msg_lower for k in [
+        "apply leave", "request leave", "submit leave", "apply casual", "apply sick",
+        "create ticket", "raise ticket", "approve leave", "reject leave",
+        "post announcement", "assign employee", "assign to project"
+    ]):
+        return {"intent": "HR_ACTION", "confidence": 0.99, "reason": "fast-path keyword match"}
+
+    # SQL_QUERY triggers
+    if any(k in msg_lower for k in [
+        "which employees", "who knows", "who is assigned", "list projects",
+        "show projects", "ongoing projects", "leave balance", "how many leave days"
+    ]):
+        return {"intent": "SQL_QUERY", "confidence": 0.95, "reason": "fast-path keyword match"}
+
+    # POLICY_QA triggers
+    if any(k in msg_lower for k in [
+        "what is the policy", "wfh policy", "sick leave policy", "work from home rules",
+        "leave entitlement", "probation policy", "notice period"
+    ]):
+        return {"intent": "POLICY_QA", "confidence": 0.95, "reason": "fast-path keyword match"}
+
+    return None
+
+
 async def classify_route(message: str) -> Dict[str, Any]:
     """Return {"intent": str, "confidence": float, "reason": str}."""
+    # Fast path heuristic check (0 API cost, <1ms)
+    fast_match = _fast_heuristic_route(message)
+    if fast_match:
+        logger.info("Router fast-path HIT for: '%s' -> %s", message[:30], fast_match["intent"])
+        return fast_match
+
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     response = await client.chat.completions.create(
         model=settings.openai_chat_model,

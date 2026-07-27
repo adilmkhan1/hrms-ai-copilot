@@ -34,6 +34,7 @@ Thumbs.db
 !PRD.md
 !SOFTWARE_ENGINEER_LEARNER_GUIDE.md
 !README.md
+!docs/*.md
 
 # Local runtime/build artifacts
 frontend/.next/

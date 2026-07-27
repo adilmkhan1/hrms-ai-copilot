@@ -166,6 +166,13 @@ async def answer_policy_question(
             "sources": [{"title": str, "category": str, "filename": str | None}],
         }
     """
+    from app.services.ai.cache import get_cached_response, set_cached_response
+
+    # Cost optimization: check cache first
+    cached = get_cached_response(question)
+    if cached:
+        return cached
+
     store = get_vector_store()
 
     if store.count() == 0:
@@ -228,4 +235,6 @@ async def answer_policy_question(
                 }
             )
 
-    return {"answer": answer, "sources": sources}
+    result = {"answer": answer, "sources": sources}
+    set_cached_response(question, result)
+    return result
