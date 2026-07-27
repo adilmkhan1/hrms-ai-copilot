@@ -50,6 +50,105 @@
 
 ## 🏗️ Architecture
 
+### LangGraph Multi-Agent Orchestration Graph
+
+```mermaid
+flowchart TD
+    START([🚀 START]) --> LC
+
+    LC["⚙️ load_context\nStamp user / role / token\nonto shared HRCopilotState"]
+    LC --> RI
+
+    RI["🧭 route_intent\nLLM classifies message into\nPOLICY_QA / SQL_QUERY / HR_ACTION / UNKNOWN"]
+
+    RI -->|POLICY_QA| PR
+    RI -->|SQL_QUERY| SA
+    RI -->|HR_ACTION| CA
+    RI -->|UNKNOWN| UN
+
+    PR["📄 policy_rag\nChromaDB vector search\n→ GPT-4o-mini grounded answer\n+ source citations"]
+    SA["🗄️ sql_agent\nText → SQL generation\n→ AST guardrails\n→ role-scoped execution"]
+    CA["🤖 classify_action\nLLM classifies HR intent\n+ extracts parameters\n(approve_leave, create_ticket…)"]
+    UN["❓ unknown\nReturn helpful\ncapabilities message"]
+
+    CA -->|"needs_confirmation = False\nsafe actions only"| EA
+    CA -->|"needs_confirmation = True\nhigh-impact actions"| HN
+
+    HN["🔶 hitl_node\nCalls interrupt()\n⏸️ GRAPH PAUSES HERE\nState saved to MemorySaver\nReturns thread_id to frontend"]
+
+    HN -.->|"POST /actions/confirm\nCommand(resume={'confirmed': True})\n✅ User confirmed"| EA
+    HN -.->|"POST /actions/confirm\nCommand(resume={'confirmed': False})\n❌ User cancelled"| CN
+
+    EA["⚡ execute_action\nCalls backend REST API\nvia httpx → existing\nservice layer → DB"]
+    CN["🚫 cancelled\nAction cancelled by user\nReturns cancellation message"]
+
+    PR --> AL
+    SA --> AL
+    EA --> AL
+    CN --> AL
+    UN --> AL
+
+    AL["📝 audit_log\nWrite to ai_audit_logs table\nuser_id, role, intent,\ntool_name, status, timestamp"]
+
+    AL --> END_NODE([🏁 END])
+
+    %% Node styling by category
+    style START fill:#6366f1,stroke:#4338ca,color:#fff
+    style END_NODE fill:#6366f1,stroke:#4338ca,color:#fff
+    style LC fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style RI fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style PR fill:#14532d,stroke:#22c55e,color:#86efac
+    style SA fill:#14532d,stroke:#22c55e,color:#86efac
+    style CA fill:#78350f,stroke:#f59e0b,color:#fde68a
+    style UN fill:#374151,stroke:#6b7280,color:#d1d5db
+    style HN fill:#7c2d12,stroke:#f97316,color:#fed7aa
+    style EA fill:#14532d,stroke:#22c55e,color:#86efac
+    style CN fill:#450a0a,stroke:#ef4444,color:#fca5a5
+    style AL fill:#1e1b4b,stroke:#8b5cf6,color:#c4b5fd
+```
+
+**Legend:**
+- 🔵 Blue — Entry nodes (START, load_context, route_intent)
+- 🟢 Green — Execution nodes (policy_rag, sql_agent, execute_action)
+- 🟡 Amber — HR Action classification
+- 🟠 Orange — **HITL node** (interrupt / resume checkpoint)
+- 🔴 Red — Cancellation node
+- 🟣 Purple — Audit log & END
+- `────` Solid arrows = direct edges
+- `- - →` Dashed arrows = resumed after human confirmation (via `POST /actions/confirm`)
+
+### HITL Pause/Resume Sequence
+
+```mermaid
+sequenceDiagram
+    participant U as 👤 User
+    participant FE as 🖥️ Frontend
+    participant API as 🔌 FastAPI
+    participant G as 🔷 LangGraph Graph
+    participant MS as 💾 MemorySaver
+
+    U->>FE: "Approve leave request #3"
+    FE->>API: POST /chat/actions
+    API->>G: graph.ainvoke(state, thread_id)
+    G->>G: load_context → route_intent → classify_action
+    Note over G: needs_confirmation = True
+    G->>MS: Save state (checkpoint)
+    G-->>API: GraphInterrupt raised
+    API-->>FE: {needs_confirmation: true, thread_id: "abc"}
+    FE-->>U: 🔶 Show confirmation card
+
+    U->>FE: Click ✅ Confirm
+    FE->>API: POST /chat/actions/confirm {thread_id: "abc", confirmed: true}
+    API->>G: graph.ainvoke(Command(resume={confirmed: true}))
+    G->>MS: Load saved state
+    G->>G: hitl_node resumed → execute_action → audit_log
+    G-->>API: Final state {result: "Leave #3 approved"}
+    API-->>FE: {success: true, result: "..."}
+    FE-->>U: ✅ "Leave request #3 has been approved"
+```
+
+### Component Overview
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    NEXT.JS FRONTEND                      │
@@ -66,36 +165,16 @@
 │  POST /api/v1/chat/actions/confirm → HITL Resume        │
 │  POST /api/v1/chat/router      → Intent Router          │
 │  GET  /api/v1/chat/my-activity → User AI History        │
-│  GET  /api/v1/chat/audit-logs  → Admin Audit Logs       │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│             LANGGRAPH STATEGRAPH (graph.py)             │
-│                                                         │
-│  START → load_context → route_intent                    │
-│                ↓ conditional_edge                       │
-│   ┌────────────┼──────────────┬───────────┐            │
-│ policy_rag  sql_agent  classify_action  unknown         │
-│                                  ↓                     │
-│                         ┌────────┴───────┐             │
-│                      hitl_node    execute_action        │
-│                      interrupt()         │              │
-│                         ↓ (resume)       │              │
-│                    execute_action        │              │
-│                         └───────┬────────┘             │
-│                              audit_log → END            │
 └──────────────────────────┬──────────────────────────────┘
               ┌────────────┴────────────┐
               ▼                         ▼
 ┌─────────────────────┐   ┌──────────────────────────────┐
 │  READ-ONLY TOOLS    │   │  BACKEND API TOOL CALLING    │
 │  • ChromaDB RAG     │   │  • POST /leaves/requests     │
-│  • Safe SELECT SQL  │   │  • PATCH /leaves/requests/:id│
-│  • Forbidden cols   │   │  • POST /tickets             │
+│  • Safe SELECT SQL  │   │  • PATCH /leaves/:id/approve │
+│  • AST guardrails   │   │  • POST /tickets             │
 │  • Role filters     │   │  • POST /announcements       │
-└──────────┬──────────┘   │  • POST /employees/:id/projs │
-           │              └──────────────┬───────────────┘
+└──────────┬──────────┘   └──────────────┬───────────────┘
            └──────────────┬─────────────┘
                           ▼
             EXISTING SQLITE DATABASE (hrms.db)
