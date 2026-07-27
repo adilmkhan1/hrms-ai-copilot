@@ -356,16 +356,16 @@ To manage costs and latency at **50,000 active employees** (~3,000,000 AI querie
 
 ```mermaid
 flowchart TD
-    UQ[👤 User Query] --> L1{Layer 1: Exact & Semantic Cache\napp/services/ai/cache.py}
+    UQ["👤 User Query"] --> L1{"Layer 1: Exact & Semantic Cache\napp/services/ai/cache.py"}
     
-    L1 -->|Hit ~65%| CH[⚡ Return Cached Answer\n0 LLM API Cost | <15ms]
-    L1 -->|Miss| L2{Layer 2: Fast Heuristic Router\napp/services/ai/router_agent.py}
+    L1 -->|"Hit (~65%)"| CH["⚡ Return Cached Answer\n0 LLM API Cost (under 15ms)"]
+    L1 -->|"Miss"| L2{"Layer 2: Fast Heuristic Router\napp/services/ai/router_agent.py"}
 
-    L2 -->|Match ~40%| FP[🚀 Skip LLM Router Call\nInstant Keyword Route]
-    L2 -->|Complex Query| L3[Layer 3: Model Tiering\nGPT-4o-mini / Haiku default\nGPT-4o on validation failure only]
+    L2 -->|"Match (~40%)"| FP["🚀 Skip LLM Router Call\nInstant Keyword Route"]
+    L2 -->|"Complex Query"| L3["Layer 3: Model Tiering\nGPT-4o-mini / Haiku default\nGPT-4o on validation failure only"]
 
-    L3 --> L4[Layer 4: Context Truncation\nTop-3 RAG chunks + Role DDL]
-    L4 --> L5[Layer 5: Enterprise vLLM Roadmap\nAWS GPU self-hosted Llama 8B]
+    L3 --> L4["Layer 4: Context Truncation\nTop-3 RAG chunks + Role DDL"]
+    L4 --> L5["Layer 5: Enterprise vLLM Roadmap\nAWS GPU self-hosted Llama 8B"]
 
     style CH fill:#14532d,stroke:#22c55e,color:#86efac
     style FP fill:#14532d,stroke:#22c55e,color:#86efac
