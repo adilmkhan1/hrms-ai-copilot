@@ -15,21 +15,22 @@
 ## 📋 Table of Contents
 
 1. [Project Overview](#-project-overview)
-2. [Architecture](#-architecture)
-3. [AI Features Implemented](#-ai-features-implemented)
-4. [LangGraph Orchestration](#-langgraph-multi-agent-orchestration)
-5. [Human-in-the-Loop (HITL)](#-human-in-the-loop-hitl)
-6. [Scale & Cost Optimization (50,000 Users Scale)](#-scale--cost-optimization-50000-users-scale)
-7. [Role-Based Access Control](#-role-based-access-control-for-ai)
-8. [Setup Instructions](#-setup-instructions)
-9. [Environment Variables](#-environment-variables)
-10. [AI Endpoint Contracts](#-ai-endpoint-contracts)
-11. [Test Prompts](#-test-prompts)
-12. [Project Structure](#-project-structure)
-13. [Security Decisions](#-security-decisions)
-14. [Known Limitations](#-known-limitations)
-15. [Evaluation Results](#-evaluation-results)
-16. [Documentation](#-documentation)
+2. [Application Screenshots](#-application-screenshots)
+3. [Architecture](#-architecture)
+4. [AI Features Implemented](#-ai-features-implemented)
+5. [LangGraph Orchestration](#-langgraph-multi-agent-orchestration)
+6. [Human-in-the-Loop (HITL)](#-human-in-the-loop-hitl)
+7. [Scale & Cost Optimization (50,000 Users Scale)](#-scale--cost-optimization-50000-users-scale)
+8. [Role-Based Access Control](#-role-based-access-control-for-ai)
+9. [Setup Instructions](#-setup-instructions)
+10. [Environment Variables](#-environment-variables)
+11. [AI Endpoint Contracts](#-ai-endpoint-contracts)
+12. [Test Prompts](#-test-prompts)
+13. [Project Structure](#-project-structure)
+14. [Security Decisions](#-security-decisions)
+15. [Known Limitations](#-known-limitations)
+16. [Evaluation Results](#-evaluation-results)
+17. [Documentation](#-documentation)
 
 ---
 
@@ -44,6 +45,31 @@
 | **HR Task Automation Agent** | Apply leave, create tickets, approve requests via backend API tool calling |
 | **AI RBAC** | AI permissions mirror existing HRMS roles (EMPLOYEE / MANAGER / ADMIN) |
 | **AI Audit Logging** | Every AI interaction logged to `ai_audit_logs` table |
+
+---
+
+## 🖼️ Application Screenshots
+
+### 1. 🔷 Human-in-the-Loop (HITL) Confirmation Card
+*LangGraph `interrupt()` pauses execution for high-impact actions (approving leaves, posting announcements) and renders an amber confirmation card before proceeding.*
+
+![Human-in-the-Loop Confirmation Card](docs/images/hitl_confirmation_card.png)
+
+### 2. 🗄️ People & Projects (SQL Agent Results Table)
+*Natural language queries rendered into safe SELECT queries with AST guardrails (`sqlglot`) and dynamic results tables.*
+
+![SQL Agent Results Table](docs/images/sql_projects_result.png)
+
+### 3. 📝 Recent Activity Feed (AI Audit Trail)
+*Persistent AI interaction audit trail logged to `ai_audit_logs` table with intent, tool used, and timestamp.*
+
+![Recent Activity Feed](docs/images/recent_activity_feed.png)
+
+### 4. 📄 Ask HR Policy (Grounded RAG Assistant)
+*Policy Q&A interface grounded strictly in indexed policy documents with ChromaDB vector search and source citations.*
+
+![Ask HR Policy Assistant](docs/images/ask_hr_policy_tab.png)
+
 | **LangGraph Orchestration** | Full `StateGraph` with 11 nodes and conditional edges |
 | **Human-in-the-Loop (HITL)** | High-impact actions pause for confirmation via `interrupt()` |
 
